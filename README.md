@@ -14,7 +14,8 @@ macOS用のバッテリー情報表示メニューバーアプリ
 
 ## スクリーンショット
 
-（ここに画像を追加）
+<img width="374" height="379" alt="image" src="https://github.com/user-attachments/assets/19adc7fc-0433-4c07-8a09-0e46425dde81" />
+
 
 ## インストール方法
 

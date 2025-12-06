@@ -638,10 +638,10 @@ struct SettingsView: View {
                     Text("PowerTile")
                         .font(.caption)
                         .fontWeight(.semibold)
-                    Text("Version 1.0.0")
+                    Text("Version 1.0.1")
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                    Text("© 2025 Your Name")
+                    Text("© 2025 ikepe")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }

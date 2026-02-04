@@ -49,6 +49,11 @@ struct L10n {
     var menuBarDisplay: String { language == .japanese ? "メニューバー表示" : "Menu Bar Display" }
     var designCapacity: String { language == .japanese ? "設計容量" : "Design Capacity" }
     var currentCapacity: String { language == .japanese ? "現在の容量" : "Current Capacity" }
+    var batteryToBattery: String { language == .japanese ? "→ バッテリー" : "→ Battery" }
+    var batteryFromBattery: String { language == .japanese ? "← バッテリー" : "← Battery" }
+    var directPower: String { language == .japanese ? "直接給電" : "Direct Power" }
+    var chargingPower: String { language == .japanese ? "充電電力" : "Charging" }
+    var systemConsumption: String { language == .japanese ? "システム消費" : "System" }
 }
 
 // MARK: - テーマカラー
@@ -138,18 +143,20 @@ struct MenuContentView: View {
                 // Power タイル（グラフ付き）
                 FlipTileWithGraph(
                     icon: "bolt.fill",
-                    iconColor: batteryManager.isCharging ? .green : .yellow,
-                    title: batteryManager.isCharging ? l10n.charging : l10n.power,
-                    mainValue: batteryManager.wattage,
-                    subValue: batteryManager.isCharging ? l10n.toBattery : l10n.discharging,
+                    iconColor: batteryManager.powerFlowState == .charging ? .green :
+                               batteryManager.powerFlowState == .discharging ? .yellow : .blue,
+                    title: l10n.power,
+                    mainValue: batteryManager.getPowerDisplayText(l10n: l10n),
+                    subValue: batteryManager.getPowerSubText(l10n: l10n),
                     backDetails: [
                         (l10n.adapter, batteryManager.adapterWattage),
-                        (l10n.voltage, batteryManager.voltage),
-                        (l10n.current, batteryManager.amperage)
+                        (l10n.chargingPower, String(format: "%.1fW", batteryManager.chargingPower)),
+                        ("Battery Flow", batteryManager.wattage)
                     ],
                     theme: theme,
                     historyData: batteryManager.powerHistory,
-                    graphColor: batteryManager.isCharging ? .green : .yellow,
+                    graphColor: batteryManager.powerFlowState == .charging ? .green :
+                                batteryManager.powerFlowState == .discharging ? .yellow : .blue,
                     minValue: 0,
                     maxValue: max(batteryManager.powerHistory.max() ?? 50, 50)
                 )
@@ -517,26 +524,92 @@ struct HeaderView: View {
     @Binding var showSettings: Bool
     let theme: ThemeColors
     @AppStorage("appLanguage") private var appLanguage: String = "en"
-    
+
+    func getHeaderStatusText() -> String {
+        switch batteryManager.powerFlowState {
+        case .discharging:
+            return l10n.onBattery
+        case .charging:
+            return l10n.charging
+        case .pluggedInFull:
+            return batteryManager.isPluggedIn ? "充電完了" : l10n.onBattery
+        case .pluggedInIdle:
+            return "給電中"
+        }
+    }
+
+    func getHeaderMainValue() -> String {
+        switch batteryManager.powerFlowState {
+        case .discharging:
+            // バッテリー駆動時は放電電力
+            return String(format: "%.1fW", batteryManager.dischargingPower)
+        case .charging:
+            // 充電中はバッテリーへの充電電力を表示
+            return String(format: "%.1fW", batteryManager.chargingPower)
+        case .pluggedInFull, .pluggedInIdle:
+            // 給電中（満充電）はバッテリーへの給電 = 0W
+            return "0W"
+        }
+    }
+
+    func getHeaderDetailText() -> String {
+        switch batteryManager.powerFlowState {
+        case .discharging:
+            return l10n.notConnected
+        case .charging, .pluggedInFull, .pluggedInIdle:
+            // アダプター情報のみ表示（電力情報は各タイルで表示）
+            return batteryManager.adapterInfo
+        }
+    }
+
+    func getHeaderIcon() -> String {
+        switch batteryManager.powerFlowState {
+        case .discharging:
+            return "battery.100"
+        case .charging:
+            return "bolt.fill"
+        case .pluggedInFull:
+            return "bolt.fill"
+        case .pluggedInIdle:
+            return "powerplug.fill"
+        }
+    }
+
+    func getHeaderIconColor() -> Color {
+        switch batteryManager.powerFlowState {
+        case .discharging:
+            return .gray
+        case .charging:
+            return .green
+        case .pluggedInFull:
+            return .blue
+        case .pluggedInIdle:
+            return .blue
+        }
+    }
+
     var body: some View {
         HStack(alignment: .center, spacing: 16) {
             ZStack {
                 Circle()
-                    .fill(batteryManager.isCharging ? Color.green.opacity(0.2) : Color.gray.opacity(0.2))
+                    .fill(getHeaderIconColor().opacity(0.2))
                     .frame(width: 50, height: 50)
-                Image(systemName: batteryManager.isCharging ? "bolt.fill" : "battery.100")
+                Image(systemName: getHeaderIcon())
                     .font(.system(size: 24))
-                    .foregroundColor(batteryManager.isCharging ? .green : .gray)
+                    .foregroundColor(getHeaderIconColor())
             }
             
             VStack(alignment: .leading, spacing: 2) {
-                Text(batteryManager.isCharging ? l10n.charging : l10n.onBattery)
+                // 状態表示
+                Text(getHeaderStatusText())
                     .font(.caption)
                     .foregroundColor(theme.textSecondary)
-                Text(batteryManager.isCharging ? batteryManager.adapterWattage : batteryManager.wattage)
+                // メイン電力値
+                Text(getHeaderMainValue())
                     .font(.system(size: 28, weight: .bold))
                     .foregroundColor(theme.textPrimary)
-                Text(batteryManager.isCharging ? batteryManager.adapterInfo : l10n.notConnected)
+                // 詳細情報
+                Text(getHeaderDetailText())
                     .font(.caption2)
                     .foregroundColor(theme.textSecondary)
                     .lineLimit(1)
@@ -583,7 +656,15 @@ struct SettingsView: View {
     var l10n: L10n {
         L10n(language: language)
     }
-    
+
+    var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.1.0"
+    }
+
+    var appBuild: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "3"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(l10n.settings)
@@ -638,7 +719,7 @@ struct SettingsView: View {
                     Text("PowerTile")
                         .font(.caption)
                         .fontWeight(.semibold)
-                    Text("Version 1.0.1")
+                    Text("Version \(appVersion) (Build \(appBuild))")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                     Text("© 2025 ikepe")
@@ -712,6 +793,14 @@ struct MenuBarOptionRow: View {
     }
 }
 
+// MARK: - 電力フローの状態
+enum PowerFlowState {
+    case discharging       // 放電中（バッテリー駆動）
+    case charging          // 充電中
+    case pluggedInFull     // 給電中（バッテリー満充電）
+    case pluggedInIdle     // 給電中（充電していない）
+}
+
 // MARK: - バッテリー情報を管理するクラス
 class BatteryManager: ObservableObject {
     @Published var batteryLevel: Int = 0
@@ -736,10 +825,20 @@ class BatteryManager: ObservableObject {
     @Published var adapterInfo: String = "Not Connected"
     @Published var healthValue: Int = 100
     @Published var timeRemainingMinutes: Int = 0
-    
+
+    // 新規: 充電/放電の詳細情報
+    @Published var chargingPower: Double = 0  // バッテリーへの充電電力（W）
+    @Published var dischargingPower: Double = 0  // バッテリーからの放電電力（W）
+    @Published var systemPower: Double = 0  // システム全体の消費電力（W）
+    @Published var powerFlowState: PowerFlowState = .discharging
+
     // 設計容量と現在の容量
     @Published var designCapacity: Int = 0
     @Published var currentMaxCapacity: Int = 0
+
+    // バッテリー残量（Wh）
+    @Published var remainingCapacityWh: Double = 0  // 現在の残量（Wh）
+    @Published var maxCapacityWh: Double = 0  // 最大容量（Wh）
     
     // 履歴データ（グラフ用）
     @Published var batteryHistory: [Double] = []
@@ -768,7 +867,8 @@ class BatteryManager: ObservableObject {
     init() {
         updateAllInfo()
         setupPowerSourceNotification()
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        // 更新間隔を2秒に短縮（充電状態の変化により早く反応）
+        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             self?.updateAllInfo()
             self?.recordHistory()
         }
@@ -792,8 +892,18 @@ class BatteryManager: ObservableObject {
                 self.batteryHistory.removeFirst()
             }
             
-            // 電力
-            self.powerHistory.append(self.rawWattage)
+            // 電力（状態に応じた電力値を記録）
+            let powerValue: Double
+            switch self.powerFlowState {
+            case .charging:
+                powerValue = self.chargingPower
+            case .discharging:
+                powerValue = self.dischargingPower
+            case .pluggedInFull, .pluggedInIdle:
+                // システムの実際の消費電力を記録
+                powerValue = self.systemPower
+            }
+            self.powerHistory.append(powerValue)
             if self.powerHistory.count > self.maxHistoryCount {
                 self.powerHistory.removeFirst()
             }
@@ -836,24 +946,86 @@ class BatteryManager: ObservableObject {
     }
     
     var menuBarTimeText: String {
-        if timeRemainingMinutes <= 0 {
+        let minutes = calculateTimeRemaining()
+        if minutes <= 0 {
             return "--:--"
         }
-        let hours = timeRemainingMinutes / 60
-        let mins = timeRemainingMinutes % 60
+        let hours = minutes / 60
+        let mins = minutes % 60
         return String(format: "%d:%02d", hours, mins)
     }
     
     func getTimeRemainingShort(l10n: L10n) -> String {
-        if timeRemainingMinutes <= 0 {
+        let minutes = calculateTimeRemaining()
+        
+        // -1 はデータ不足、0は計算不要（給電中など）
+        if minutes < 0 {
+            return l10n.calculating
+        } else if minutes == 0 {
+            // 給電中でバッテリー充放電がない場合
+            if powerFlowState == .pluggedInFull || powerFlowState == .pluggedInIdle {
+                return l10n.language == .japanese ? "給電中" : "Plugged In"
+            }
             return l10n.calculating
         }
-        let hours = timeRemainingMinutes / 60
-        let mins = timeRemainingMinutes % 60
+        
+        let hours = minutes / 60
+        let mins = minutes % 60
         if isCharging {
             return "\(l10n.timeToFull) \(hours)h \(String(format: "%02d", mins))m"
         } else {
             return "\(hours)h \(String(format: "%02d", mins))m"
+        }
+    }
+
+    /// バッテリー持ち時間を計算（分単位）
+    /// 放電中: 残量 ÷ 消費電力
+    /// 充電中: (満充電容量 - 現在残量) ÷ 充電電力
+    private func calculateTimeRemaining() -> Int {
+        // まず容量データが有効かチェック
+        guard maxCapacityWh > 0, remainingCapacityWh > 0 else {
+            print("⚠️ Time calculation: Invalid capacity data")
+            return -1  // データ不足を示す
+        }
+        
+        switch powerFlowState {
+        case .discharging:
+            // 放電中: 残量Wh ÷ 消費電力W = 持ち時間（時間）
+            guard dischargingPower > 0.1 else {
+                print("⚠️ Time calculation: Discharging power too low (\(dischargingPower)W)")
+                return -1
+            }
+            let hoursRemaining = remainingCapacityWh / dischargingPower
+            let minutes = Int(hoursRemaining * 60)
+            print("⏱️ Battery time: \(String(format: "%.2f", remainingCapacityWh))Wh ÷ \(String(format: "%.1f", dischargingPower))W = \(minutes)min")
+            return minutes
+
+        case .charging:
+            // 充電中: 残り容量Wh ÷ 充電電力W = 満充電までの時間（時間）
+            if batteryLevel >= 100 {
+                print("⏱️ Battery full, no time remaining")
+                return -1
+            }
+            
+            guard chargingPower > 0.1 else {
+                print("⚠️ Time calculation: Charging power too low (\(chargingPower)W)")
+                return -1
+            }
+            
+            let remainingToCharge = maxCapacityWh - remainingCapacityWh
+            guard remainingToCharge > 0 else {
+                print("⏱️ Battery nearly full")
+                return -1
+            }
+            
+            let hoursToFull = remainingToCharge / chargingPower
+            let minutes = Int(hoursToFull * 60)
+            print("⏱️ Charge time: \(String(format: "%.2f", remainingToCharge))Wh ÷ \(String(format: "%.1f", chargingPower))W = \(minutes)min")
+            return minutes
+
+        case .pluggedInFull, .pluggedInIdle:
+            // 給電中は時間計算不要
+            return -1
         }
     }
     
@@ -872,6 +1044,31 @@ class BatteryManager: ObservableObject {
             return l10n.normal
         } else {
             return l10n.serviceRecommended
+        }
+    }
+
+    func getPowerDisplayText(l10n: L10n) -> String {
+        switch powerFlowState {
+        case .discharging:
+            return String(format: "%.1fW", dischargingPower)
+        case .charging:
+            return String(format: "%.1fW", chargingPower)
+        case .pluggedInFull, .pluggedInIdle:
+            // システムの実際の消費電力を表示（絶対値）
+            return String(format: "%.1fW", abs(systemPower))
+        }
+    }
+
+    func getPowerSubText(l10n: L10n) -> String {
+        switch powerFlowState {
+        case .discharging:
+            return l10n.batteryFromBattery
+        case .charging:
+            return l10n.batteryToBattery
+        case .pluggedInFull:
+            return l10n.systemConsumption
+        case .pluggedInIdle:
+            return l10n.systemConsumption
         }
     }
     
@@ -923,10 +1120,16 @@ class BatteryManager: ObservableObject {
         
         DispatchQueue.main.async {
             if let connected = properties["ExternalConnected"] as? Bool {
+                if connected != self.isPluggedIn {
+                    print("🔌 Power connection changed: \(self.isPluggedIn) → \(connected)")
+                }
                 self.isPluggedIn = connected
             }
-            
+
             if let charging = properties["IsCharging"] as? Bool {
+                if charging != self.isCharging {
+                    print("🔋 Charging state changed: \(self.isCharging) → \(charging)")
+                }
                 self.isCharging = charging
             }
             
@@ -958,31 +1161,146 @@ class BatteryManager: ObservableObject {
                 self.healthValue = health
             }
             
-            if let temp = properties["Temperature"] as? Int {
+            // 温度取得（複数のキーを試す）
+            var tempValue: Int? = properties["Temperature"] as? Int
+            if tempValue == nil {
+                // 代替キーを試す
+                tempValue = properties["BatteryTemperature"] as? Int
+            }
+
+            if let temp = tempValue {
                 let celsius = Double(temp) / 100.0
                 self.temperature = String(format: "%.1f°C", celsius)
                 self.rawTemperature = celsius
+
+                // デバッグ: 温度の生値をログ出力
+                print("🌡️ Temperature raw: \(temp), celsius: \(celsius)")
+            } else {
+                // 温度が取得できない場合
+                print("⚠️ Temperature not available in properties")
+                self.temperature = "N/A"
+                self.rawTemperature = 0
             }
             
+            // 電圧を先に取得（電力計算に必要）
             if let volt = properties["Voltage"] as? Int {
                 let v = Double(volt) / 1000.0
                 self.voltage = String(format: "%.1fV", v)
                 self.rawVoltage = v
+                print("📊 Voltage: \(volt)mV = \(v)V")
+            } else {
+                print("⚠️ Voltage not found in properties")
             }
-            
+
             if let amp = properties["Amperage"] as? Int {
-                let a = Double(abs(amp)) / 1000.0
-                self.amperage = String(format: "%.2fA", a)
-                self.rawAmperage = a
-                
-                let watts = self.rawVoltage * a
-                self.wattage = String(format: "%.1fW", watts)
-                self.rawWattage = watts
+                print("📊 Amperage raw: \(amp)mA")
+                // Amperage（mA単位）:
+                // 正の値 = バッテリーへ充電中
+                // 負の値 = バッテリーから放電中
+                // 0付近 = バッテリーへの充放電なし（給電のみ）
+                let ampInA = Double(amp) / 1000.0
+                let absAmp = abs(ampInA)
+
+                // 電圧が未取得の場合はスキップ
+                guard self.rawVoltage > 0 else {
+                    print("⚠️ Voltage not available yet, skipping power calculation")
+                    return
+                }
+
+                let watts = self.rawVoltage * absAmp
+
+                self.amperage = String(format: "%.2fA", absAmp)
+                self.rawAmperage = absAmp
+
+                // 電力フロー状態を判定
+                if !self.isPluggedIn {
+                    // バッテリー駆動
+                    self.powerFlowState = .discharging
+
+                    // バッテリー駆動なのに電流が非常に小さい場合
+                    if watts < 1.0 {
+                        // 最小値を設定（macOSは必ず何かしらの電力を消費している）
+                        let minPower = 5.0  // 最低5W
+                        self.dischargingPower = minPower
+                        self.wattage = String(format: "~%.0fW", minPower)
+                        print("⚠️ Very low discharge current (\(absAmp)A), using minimum power estimate")
+                    } else {
+                        self.dischargingPower = watts
+                        self.wattage = String(format: "%.1fW", watts)
+                    }
+
+                    self.chargingPower = 0
+                    self.systemPower = self.dischargingPower
+                    self.rawWattage = self.dischargingPower
+                } else if amp > 100 {
+                    // 充電中（100mA以上の充電電流）
+                    self.powerFlowState = .charging
+                    self.chargingPower = watts
+                    self.dischargingPower = 0
+                    // システム消費電力 = アダプター電力 - 充電電力
+                    self.systemPower = 0  // 後でアダプター情報から計算
+                    self.wattage = String(format: "+%.1fW", watts)
+                    self.rawWattage = watts
+                } else if amp < -100 {
+                    // 給電中だが放電している
+                    // これはシステムが高負荷時にアダプター+バッテリーから電力供給される状態
+                    // ただし、通常はアダプターから供給され、バッテリーは補助的
+                    self.powerFlowState = .pluggedInIdle
+                    self.dischargingPower = 0  // バッテリーからの放電ではなくシステム消費
+                    self.chargingPower = 0
+                    self.systemPower = watts  // システムの実際の消費電力
+                    self.wattage = String(format: "%.1fW", watts)  // マイナス表示しない
+                    self.rawWattage = watts
+                } else {
+                    // 給電中、バッテリーはほぼ充放電なし
+                    if self.batteryLevel >= 95 {
+                        self.powerFlowState = .pluggedInFull
+                    } else {
+                        self.powerFlowState = .pluggedInIdle
+                    }
+                    self.chargingPower = 0
+                    self.dischargingPower = 0
+
+                    // アダプターから直接給電されているシステム消費電力
+                    // この場合、バッテリーのAmperageは0付近だが、
+                    // システムは実際には電力を消費している
+                    // ヘッダーに表示される電圧×電流から推定
+                    self.systemPower = watts  // 実際の測定値（ただし非常に小さい）
+
+                    // より正確な推定: 通常のアイドル時は5-15W程度
+                    if watts < 2.0 {
+                        // バッテリー経由の測定では正確な値が取れないため推定
+                        self.systemPower = 7.0  // アイドル時の典型的な消費電力
+                        self.wattage = "~7W"
+                    } else {
+                        self.systemPower = watts
+                        self.wattage = String(format: "%.1fW", watts)
+                    }
+                    self.rawWattage = self.systemPower
+                }
+
+                // デバッグ: 電力状態をログ出力
+                print("⚡ Amperage: \(amp)mA (\(String(format: "%.3f", ampInA))A), Voltage: \(self.rawVoltage)V")
+                print("   Calculated watts: \(watts)W")
+                print("   State: \(self.powerFlowState)")
+                print("   Charging: \(self.chargingPower)W, Discharging: \(self.dischargingPower)W, System: \(self.systemPower)W")
+                print("   IsCharging: \(self.isCharging), IsPluggedIn: \(self.isPluggedIn), Level: \(self.batteryLevel)%")
+                print("   Wattage display: \(self.wattage)")
+            } else {
+                print("⚠️ Amperage not found in properties")
             }
             
             if let capacity = properties["AppleRawMaxCapacity"] as? Int {
                 let wh = Double(capacity) * self.rawVoltage / 1000.0
                 self.whCapacity = wh
+            }
+
+            // バッテリー残量（Wh）を計算
+            // 現在の容量 × 電圧 ÷ 1000 = Wh
+            if self.currentMaxCapacity > 0 && self.rawVoltage > 0 {
+                self.maxCapacityWh = Double(self.currentMaxCapacity) * self.rawVoltage / 1000.0
+                self.remainingCapacityWh = self.maxCapacityWh * Double(self.batteryLevel) / 100.0
+                print("🔋 Capacity: \(String(format: "%.2f", self.remainingCapacityWh))Wh / \(String(format: "%.2f", self.maxCapacityWh))Wh")
             }
         }
     }
